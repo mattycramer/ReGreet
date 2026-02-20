@@ -1,0 +1,28 @@
+name: Release regreet
+
+on:
+  workflow_run:
+    workflows: ["Build regreet"]
+    types: [completed]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  release:
+    name: Create GitHub release (linux)
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'gl-regreet-v')
+    uses: mattycramer/gh-actions/.github/workflows/release-from-workflow-run.yml@6f36c0ac6e0ab2616893db3824e9324523a45162
+    with:
+      tag: ${{ github.event.workflow_run.head_branch }}
+      tag_prefix: gl-regreet-v
+      allow_revision_suffix: true
+      run_id: ${{ github.event.workflow_run.id }}
+      artifact_prefix: regreet-x86_64-unknown-linux-gnu-
+      tarball_prefix: regreet-x86_64-unknown-linux-gnu-
+      checksum_prefix: regreet-sha256-checksums-
+      release_name: regreet v{version}
+    secrets: inherit

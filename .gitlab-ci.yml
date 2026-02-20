@@ -1,0 +1,63 @@
+workflow:
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^gl-/'
+    - if: '$CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_BRANCH == "mcr/staging"'
+    - if: '$CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_BRANCH == "mcr/release"'
+    - when: never
+
+stages:
+  - verify
+  - test
+  - github-sync
+  - gitlab-release
+  - gitlab-cleanup
+
+include:
+  - project: '${GL_CICD_SHARED_PROJ}'
+    ref: main
+    file: '/rustc/verify.yml'
+  - project: '${GL_CICD_SHARED_PROJ}'
+    ref: main
+    file: '/rustc/test.yml'
+  - project: '${GL_CICD_SHARED_PROJ}'
+    ref: main
+    file: '/github/validate.yml'
+  - project: '${GL_CICD_SHARED_PROJ}'
+    ref: main
+    file: '/github/push.yml'
+  - project: '${GL_CICD_SHARED_PROJ}'
+    ref: main
+    file: '/gitlab/validate.yml'
+  - project: '${GL_CICD_SHARED_PROJ}'
+    ref: main
+    file: '/gitlab/release.yml'
+  - project: '${GL_CICD_SHARED_PROJ}'
+    ref: main
+    file: '/rustc/release-build.yml'
+  - project: '${GL_CICD_SHARED_PROJ}'
+    ref: main
+    file: '/gitlab/cleanup.yml'
+
+variables:
+  GH_RELEASE_PUSH: 'true'
+  GH_FORCE_PUSH: 'true'
+  GH_PUBLIC_REPO: ''
+  GL_CLEAR_GLAB: 'false'
+  GL_RELEASE_ASSET: 'true'
+  APPEND_VERSION: 'true'
+  RELEASE_VERSION: '0.1.3'
+  VERSION_BUMP_SCRIPT: 'scripts/bump_version.py'
+  VERSION_BUMP_ARGS: '--version'
+  APPLY_PATCHES: 'true'
+  APPLY_PATCHES_EXCLUDE: ''
+  PATCH_RELEASE_DIR: 'patches/release'
+  PATCH_SERIES_FILE: 'patches/release/series'
+  GL_CICD_RUNNER_BUILD: '${GL_CICD_RUNNER_RUST}'
+  GL_CICD_RUNNER_RELEASE: '${GL_CICD_RUNNER_GLAB}'
+  GL_RELEASE_TARGET: 'x86_64-unknown-linux-gnu'
+  GL_RELEASE_CARGO_MANIFEST: 'Cargo.toml'
+  GL_RELEASE_ARTIFACT_PREFIX: 'regreet'
+  GL_RELEASE_PACKAGE_NAME: 'regreet'
+  GL_RELEASE_CARGO_EXCLUDES: ''
+  RELEASE_BINS: |
+    regreet

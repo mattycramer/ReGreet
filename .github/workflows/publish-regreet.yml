@@ -1,0 +1,19 @@
+name: Publish regreet
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish regreet (linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm published release
+        run: |
+          echo "Release published: ${{ github.event.release.tag_name }}"
+          echo "Assets:"
+          printf '%s\n' "${{ toJson(github.event.release.assets) }}"

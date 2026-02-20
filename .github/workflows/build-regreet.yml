@@ -1,0 +1,147 @@
+name: Build regreet
+
+on:
+  push:
+    tags:
+      - 'gl-regreet-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUST_TOOLCHAIN: '1.75.0'
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-24.04
+    outputs:
+      package_version: ${{ steps.version.outputs.package_version }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout shared actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ vars.GH_ACTIONS_SHARED_PROJ }}
+          ref: ${{ vars.GH_ACTIONS_SHARED_REF }}
+          path: .github/actions/gh-actions
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Ensure tag is on mcr/release
+        if: startsWith(github.ref, 'refs/tags/gl-')
+        uses: ./.github/actions/gh-actions/actions/require-release-tip
+        with:
+          release_branch: mcr/release
+          allow_merge_commits: "true"
+
+      - name: Read package version
+        id: version
+        run: |
+          set -euo pipefail
+
+          version="$(python3 scripts/get_version.py get --file Cargo.toml)"
+          if [ -z "${version}" ]; then
+            echo "Failed to resolve package version" >&2
+            exit 1
+          fi
+          echo "package_version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate tag version contract
+        if: startsWith(github.ref, 'refs/tags/gl-')
+        uses: ./.github/actions/gh-actions/actions/validate-tag-version
+        with:
+          tag_prefix: gl-regreet-v
+          expected_version: ${{ steps.version.outputs.package_version }}
+          allow_revision_suffix: "true"
+
+  build-linux:
+    name: Build regreet (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    needs: setup
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential pkg-config libgtk-4-dev
+
+      - name: Install rust
+        uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          target: ${{ env.TARGET }}
+          cache: false
+          rustflags: ""
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+        with:
+          key: ${{ env.TARGET }}-cargo-linux
+
+      - name: Ensure Cargo.lock is synchronized
+        run: |
+          set -euo pipefail
+          if cargo metadata \
+            --manifest-path Cargo.toml \
+            --locked \
+            --format-version 1 >/dev/null 2>&1; then
+            echo "Cargo.lock is synchronized"
+          else
+            echo "Cargo.lock out of sync after release mutations; regenerating"
+            cargo generate-lockfile --manifest-path Cargo.toml
+          fi
+
+      - name: Build release binary
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path Cargo.toml \
+            --bin regreet \
+            --release \
+            --target "${TARGET}" \
+            --target-dir target \
+            --locked
+
+      - name: Pack linux tarball
+        run: |
+          set -euo pipefail
+          bin_dir="target/${TARGET}/release"
+          tarball="regreet-${TARGET}-${PACKAGE_VERSION}.tar.gz"
+          test -f "${bin_dir}/regreet"
+          tar -czf "${tarball}" -C "${bin_dir}" regreet
+
+      - name: Create checksum
+        run: |
+          set -euo pipefail
+          sha256sum "regreet-${TARGET}-${PACKAGE_VERSION}.tar.gz" \
+            > "regreet-sha256-checksums-${PACKAGE_VERSION}.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: regreet-${{ env.TARGET }}-${{ env.PACKAGE_VERSION }}
+          path: |
+            regreet-${{ env.TARGET }}-${{ env.PACKAGE_VERSION }}.tar.gz
+            regreet-sha256-checksums-${{ env.PACKAGE_VERSION }}.txt
+          if-no-files-found: error
