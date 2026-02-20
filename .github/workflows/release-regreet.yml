@@ -15,7 +15,7 @@ jobs:
     if: |
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.head_branch, 'gl-regreet-v')
-    uses: mattycramer/gh-actions/.github/workflows/release-from-workflow-run.yml@7229a9e4835f635f77a95eaace0be43cbba6a12f
+    uses: mattycramer/gh-actions/.github/workflows/release-from-workflow-run.yml@7229a9eb9c9310513037655b3cfc94cd3183b375
     with:
       tag: ${{ github.event.workflow_run.head_branch }}
       tag_prefix: gl-regreet-v
