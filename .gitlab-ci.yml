@@ -57,3 +57,15 @@ variables:
   GL_RELEASE_CARGO_EXCLUDES: ''
   RELEASE_BINS: |
     regreet
+
+gl_release_build_asset:
+  script:
+    - !reference [.github_version_prepare, script]
+    - !reference [.github_release_patch_helpers, script]
+    - !reference [.gitlab_release_prepare, script]
+    - !reference [.rustc_release_asset_build, script]
+    - export DEBIAN_FRONTEND=noninteractive
+    - apt-get update -y
+    - apt-get install -y --no-install-recommends libgtk-4-dev libglib2.0-dev
+    - rm -rf /var/lib/apt/lists/*
+    - /bin/bash /tmp/rustc_release_build.sh

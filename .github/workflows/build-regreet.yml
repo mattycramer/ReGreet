@@ -15,7 +15,7 @@ defaults:
     shell: bash
 
 env:
-  RUST_TOOLCHAIN: '1.75.0'
+  RUST_TOOLCHAIN: 'nightly'
 
 jobs:
   setup:
