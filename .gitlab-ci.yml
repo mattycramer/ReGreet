@@ -71,6 +71,157 @@ variables:
   RELEASE_BINS: |
     regreet
 
+.bws_setup:
+  before_script:
+    - set -eu
+    - export PATH="/usr/local/bin:${PATH}"
+    - |
+      required_commands="
+      awk
+      bash
+      curl
+      git
+      openssl
+      python3
+      sha256sum
+      tar
+      "
+      missing=""
+      while IFS= read -r command_name || [ -n "${command_name}" ]; do
+        command_name="$(printf '%s' "${command_name}" | xargs)"
+        [ -z "${command_name}" ] && continue
+        if ! command -v "${command_name}" >/dev/null 2>&1; then
+          missing="${missing} ${command_name}"
+        fi
+      done < <(printf '%s\n' "${required_commands}")
+      if [ -n "${missing}" ]; then
+        echo "Missing required bootstrap commands:${missing}" >&2
+        exit 1
+      fi
+    - |
+      for candidate in \
+        /usr/local/bin/bws \
+        /usr/bin/bws \
+        /bin/bws \
+        /opt/bws \
+        /opt/bws/bin/bws
+      do
+        if [ -x "${candidate}" ]; then
+          ln -sf "${candidate}" /usr/local/bin/bws
+          break
+        fi
+      done
+    - |
+      if command -v bws >/dev/null 2>&1; then
+        installed_version="$(bws --version 2>/dev/null | awk '{print $NF}')"
+        if [ "${installed_version}" = "${BWS_VERSION}" ]; then
+          echo "bws ${BWS_VERSION} already installed"
+          bws_path="$(command -v bws)"
+          [ -n "${bws_path}" ] && ln -sf "${bws_path}" /usr/local/bin/bws
+          exit 0
+        fi
+      fi
+
+      download_with_retry() {
+        local url="$1"
+        local destination="$2"
+        local attempt=1
+        local max_attempts=6
+        local delay=2
+        local status=0
+
+        while :; do
+          if curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --connect-timeout 30 \
+            --max-time 180 \
+            -o "${destination}" \
+            "${url}"
+          then
+            return 0
+          fi
+          status=$?
+          rm -f "${destination}"
+          if [ "${attempt}" -ge "${max_attempts}" ]; then
+            echo "Failed to download ${url} after ${attempt} attempts." >&2
+            return "${status}"
+          fi
+          echo "Download failed for ${url}" >&2
+          echo "Attempt ${attempt}/${max_attempts}" >&2
+          echo "Retrying in ${delay}s..." >&2
+          sleep "${delay}"
+          attempt=$((attempt + 1))
+          delay=$((delay * 2))
+        done
+      }
+
+      base_url="https://github.com/mattycramer/sdk-sm/releases/download/gl-bws-cli-v${BWS_VERSION}"
+      archive_name="bws-x86_64-unknown-linux-gnu-${BWS_VERSION}.tar.gz"
+      checksum_name="bws-sha256-checksums-${BWS_VERSION}.txt"
+      tmp_dir="$(mktemp -d)"
+      trap 'rm -rf "${tmp_dir}"' EXIT
+
+      download_with_retry \
+        "${base_url}/${archive_name}" \
+        "${tmp_dir}/${archive_name}"
+      download_with_retry \
+        "${base_url}/${checksum_name}" \
+        "${tmp_dir}/${checksum_name}"
+
+      expected_hash="$(awk -v f="${archive_name}" '{
+        name=$2
+        if (name ~ /^\*/) { name=substr(name, 2) }
+        if (substr(name, 1, 2) == "./") { name=substr(name, 3) }
+        sub(/\r$/, "", name)
+        if (name == f) { print $1; exit }
+      }' "${tmp_dir}/${checksum_name}")"
+      if [ -z "${expected_hash:-}" ]; then
+        echo "Checksum for ${archive_name} not found in ${checksum_name}." >&2
+        exit 1
+      fi
+      if [ -n "${BWS_SHA256:-}" ] \
+        && [ "${expected_hash}" != "${BWS_SHA256}" ]
+      then
+        echo "Checksum mismatch for ${archive_name}" >&2
+        echo "Expected ${BWS_SHA256}, got ${expected_hash}." >&2
+        exit 1
+      fi
+
+      printf '%s  %s\n' "${expected_hash}" "${archive_name}" \
+        > "${tmp_dir}/bws.sha256"
+      (cd "${tmp_dir}" && sha256sum -c "bws.sha256")
+      tar -xzf "${tmp_dir}/${archive_name}" -C "${tmp_dir}"
+      install -m 0755 "${tmp_dir}/bws" /usr/local/bin/bws
+    - |
+      if [ ! -x /usr/local/bin/bws ]; then
+        echo "bws not found at /usr/local/bin/bws" >&2
+        ls -la /usr/local/bin || true
+        exit 1
+      fi
+    - /usr/local/bin/bws --version
+    - |
+      bws_run_with_retry() {
+        local attempt=1
+        local max="${BWS_RETRY_MAX:-3}"
+        local delay="${BWS_RETRY_DELAY:-2}"
+        while :; do
+          /usr/local/bin/bws "$@" && return 0
+          local status=$?
+          if [ "${attempt}" -ge "${max}" ]; then
+            echo "BWS run failed after ${attempt} attempts." >&2
+            return "${status}"
+          fi
+          echo "BWS run failed (attempt ${attempt}/${max})." >&2
+          echo "Retrying in ${delay}s..." >&2
+          sleep "${delay}"
+          attempt=$((attempt + 1))
+          delay=$((delay * 2))
+        done
+      }
+
 gl_release_build_asset:
   extends: .gl_release_build_asset_job
   script:
