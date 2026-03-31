@@ -1,7 +1,13 @@
+---
 workflow:
   rules:
-    - if: '$CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_TAG =~ /(^[0-9]$|^[0-9A-Za-z][0-9A-Za-z._-]{0,33}[0-9]$)/'
-    - if: '$CI_COMMIT_REF_PROTECTED == "true" && $CI_COMMIT_BRANCH == "mcr/release" && $GH_RELEASE_PUSH == "true"'
+    - if: >-
+        $CI_COMMIT_REF_PROTECTED == "true" &&
+        $CI_COMMIT_TAG =~ /(^[0-9]$|^[0-9A-Za-z][0-9A-Za-z._-]{0,33}[0-9]$)/
+    - if: >-
+        $CI_COMMIT_REF_PROTECTED == "true" &&
+        $CI_COMMIT_BRANCH == "mcr/release" &&
+        $GH_RELEASE_PUSH == "true"
     - when: never
 
 stages:
@@ -59,5 +65,71 @@ variables:
   GL_RELEASE_CARGO_MANIFEST: "Cargo.toml"
   GL_RELEASE_ARTIFACT_PREFIX: "regreet"
   GL_RELEASE_PACKAGE_NAME: "regreet"
+  GTK_SYSROOT_APT_PACKAGES: |
+    libglib2.0-dev
+    libgtk-4-dev
   RELEASE_BINS: |
     regreet
+
+gl_release_build_asset:
+  extends: .gl_release_build_asset_job
+  script:
+    - !reference [.release_version_prepare, script]
+    - !reference [.release_patch_helpers, script]
+    - !reference [.gitlab_release_prepare, script]
+    - !reference [.rustc_release_asset_build, script]
+    - |
+      set -euo pipefail
+
+      export DEBIAN_FRONTEND=noninteractive
+      sysroot="${CI_PROJECT_DIR}/.ci-gtk-sysroot"
+      archives="${CI_PROJECT_DIR}/.ci-gtk-apt-archives"
+      arch_triplet="x86_64-linux-gnu"
+
+      rm -rf "${sysroot}" "${archives}"
+      mkdir -p "${sysroot}" "${archives}/partial"
+
+      apt-get update -y
+      while IFS= read -r package_name || [ -n "${package_name}" ]; do
+        package_name="$(printf '%s' "${package_name}" | xargs)"
+        [ -z "${package_name}" ] && continue
+        apt-get install --download-only -y --no-install-recommends \
+          -o Dir::Cache::archives="${archives}" \
+          "${package_name}"
+      done < <(printf '%s\n' "${GTK_SYSROOT_APT_PACKAGES:-}")
+
+      while IFS= read -r -d '' deb_path; do
+        package_file="$(basename "${deb_path}")"
+        case "${package_file}" in
+          systemd_*|systemd-sysv_*|systemd-timesyncd_*|\
+          libpam-systemd_*|dbus-user-session_*)
+            echo "Skipping extracted runtime package ${package_file}"
+            continue
+            ;;
+        esac
+        dpkg-deb -x "${deb_path}" "${sysroot}"
+      done < <(
+        find "${archives}" -maxdepth 1 -type f -name '*.deb' -print0 \
+          | LC_ALL=C sort -z
+      )
+
+      export PKG_CONFIG_SYSROOT_DIR="${sysroot}"
+      pkgconfig_dirs="${sysroot}/usr/lib/${arch_triplet}/pkgconfig"
+      pkgconfig_dirs="${pkgconfig_dirs}:${sysroot}/usr/lib/pkgconfig"
+      pkgconfig_dirs="${pkgconfig_dirs}:${sysroot}/usr/share/pkgconfig"
+      library_dirs="${sysroot}/usr/lib/${arch_triplet}:${sysroot}/lib/${arch_triplet}"
+      library_dirs="${library_dirs}:${sysroot}/usr/lib:${sysroot}/lib"
+      include_dirs="${sysroot}/usr/include:${sysroot}/usr/include/${arch_triplet}"
+
+      export PKG_CONFIG_PATH="${pkgconfig_dirs}"
+      export PKG_CONFIG_LIBDIR="${pkgconfig_dirs}"
+      export CPATH="${include_dirs}${CPATH:+:${CPATH}}"
+      export LIBRARY_PATH="${library_dirs}${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+      ld_library_path_extra="${LD_LIBRARY_PATH:-}"
+      export LD_LIBRARY_PATH="${library_dirs}"
+      if [ -n "${ld_library_path_extra}" ]; then
+        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${ld_library_path_extra}"
+      fi
+
+      echo "Prepared GTK sysroot at ${sysroot}"
+    - /bin/bash /tmp/rustc_release_build.sh
