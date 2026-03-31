@@ -61,5 +61,3 @@ variables:
   GL_RELEASE_PACKAGE_NAME: "regreet"
   RELEASE_BINS: |
     regreet
-  EXTRA_DEPS: |
-    libgtk-4-dev
