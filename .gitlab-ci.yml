@@ -76,6 +76,47 @@ variables:
     - set -eu
     - export PATH="/usr/local/bin:${PATH}"
     - |
+      disable_apt_post_invoke_hooks() {
+        hook_dir="/etc/apt/apt.conf.d"
+        disabled_dir="/tmp/apt-hooks-disabled"
+        if [ ! -d "${hook_dir}" ]; then
+          return 0
+        fi
+        mkdir -p "${disabled_dir}"
+        for conf_file in "${hook_dir}"/*; do
+          [ -f "${conf_file}" ] || continue
+          post_invoke_regex='APT::Update::Post-Invoke|APT::Update::Post-Invoke-Success'
+          post_invoke_regex="${post_invoke_regex}|DPkg::Post-Invoke|DPkg::Pre-Invoke"
+          if grep -Eq \
+            "${post_invoke_regex}" \
+            "${conf_file}"
+          then
+            mv "${conf_file}" "${disabled_dir}/$(basename "${conf_file}")"
+          fi
+        done
+      }
+
+      apt_update_with_retry() {
+        local attempt=1
+        local max_attempts=3
+        while :; do
+          if apt-get \
+            -o Acquire::Retries=5 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            update -y
+          then
+            return 0
+          fi
+          if [ "${attempt}" -ge "${max_attempts}" ]; then
+            echo "apt-get update failed after ${attempt} attempts." >&2
+            return 1
+          fi
+          sleep $((attempt * 2))
+          attempt=$((attempt + 1))
+        done
+      }
+
       required_commands="
       awk
       bash
@@ -95,7 +136,35 @@ variables:
         fi
       done < <(printf '%s\n' "${required_commands}")
       if [ -n "${missing}" ]; then
-        echo "Missing required bootstrap commands:${missing}" >&2
+        echo "Installing missing bootstrap commands:${missing}" >&2
+        disable_apt_post_invoke_hooks
+        export DEBIAN_FRONTEND=noninteractive
+        apt_update_with_retry
+        apt-get \
+          -o Acquire::Retries=5 \
+          -o Dpkg::Use-Pty=0 \
+          install -y --no-install-recommends \
+          ca-certificates \
+          curl \
+          openssl \
+          python3 \
+          tar \
+          coreutils \
+          git \
+          bash
+        rm -rf /var/lib/apt/lists/*
+      fi
+
+      missing=""
+      while IFS= read -r command_name || [ -n "${command_name}" ]; do
+        command_name="$(printf '%s' "${command_name}" | xargs)"
+        [ -z "${command_name}" ] && continue
+        if ! command -v "${command_name}" >/dev/null 2>&1; then
+          missing="${missing} ${command_name}"
+        fi
+      done < <(printf '%s\n' "${required_commands}")
+      if [ -n "${missing}" ]; then
+        echo "Missing required bootstrap commands after install:${missing}" >&2
         exit 1
       fi
     - |
